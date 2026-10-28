@@ -1,0 +1,141 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Snap Vanish test preview</title>
+    <link rel="stylesheet" href="../styles/theme.css" />
+    <link rel="stylesheet" href="preview.css" />
+  </head>
+  <body>
+    <header class="preview-header">
+      <div class="brand">
+        <span class="brand-mark" aria-hidden="true"></span>
+        <div>
+          <h1>Snap Vanish test preview</h1>
+          <p>Local vision, effects and microphone diagnostics. Nothing leaves this device.</p>
+        </div>
+      </div>
+      <div class="header-badges">
+        <span class="pill">On-device</span>
+        <span id="versionText" class="pill">v1.0.0</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="stage-column">
+        <div class="card stage-card">
+          <div id="stage" class="stage">
+            <video id="sourceVideo" playsinline muted aria-hidden="true"></video>
+            <canvas id="displayCanvas" aria-label="Processed camera preview"></canvas>
+            <div id="stagePlaceholder" class="stage-placeholder">
+              <span class="camera-glyph" aria-hidden="true"></span>
+              <strong>Camera preview is off</strong>
+              <p>Enable the camera to test the local pipeline. Permission is requested only after you press the button.</p>
+            </div>
+            <div class="stage-badge">
+              <span id="stageDot" class="dot connecting"></span>
+              <span id="stageLabel">Starting local vision...</span>
+            </div>
+            <div id="stageHint" class="stage-hint hidden"></div>
+          </div>
+
+          <div class="stage-controls">
+            <button id="snapBtn" class="primary" type="button" disabled>Snap</button>
+            <button id="captureBtn" type="button" disabled>Capture room plate</button>
+            <button id="resetPlateBtn" type="button" disabled>Reset plate</button>
+            <span class="spacer"></span>
+            <button id="mediaBtn" type="button">Enable camera and microphone</button>
+            <button id="stopMediaBtn" class="hidden" type="button">Stop preview</button>
+          </div>
+        </div>
+
+        <section class="card panel">
+          <div class="panel-head">
+            <h2>Effect settings</h2>
+            <span class="muted">Applies to meetings and preview</span>
+          </div>
+          <div class="settings-grid">
+            <label class="field" for="sensitivity">
+              <span class="field-label">Sensitivity <output id="sensitivityValue">55</output></span>
+              <input id="sensitivity" type="range" min="0" max="100" step="1" />
+            </label>
+            <label class="field" for="dustDuration">
+              <span class="field-label">Dust duration <output id="durationValue">1.4 s</output></span>
+              <input id="dustDuration" type="range" min="600" max="4000" step="50" />
+            </label>
+            <label class="field" for="dustDirection">
+              <span class="field-label">Dust direction</span>
+              <select id="dustDirection">
+                <option value="right">Right</option>
+                <option value="left">Left</option>
+                <option value="up">Up</option>
+                <option value="random">Random</option>
+              </select>
+            </label>
+            <div class="toggle-stack">
+              <label><input id="audioConfirmation" type="checkbox" /> Require audio confirmation</label>
+              <label><input id="playSnapSound" type="checkbox" /> Play snap sound</label>
+              <label><input id="autoCaptureBackground" type="checkbox" /> Auto-capture room plate</label>
+              <label><input id="persistBackground" type="checkbox" /> Remember background plate</label>
+            </div>
+          </div>
+        </section>
+      </section>
+
+      <aside class="side-column">
+        <section class="card panel setup-card">
+          <div class="panel-head">
+            <h2>Session</h2>
+            <span id="sessionBadge" class="pill">Idle</span>
+          </div>
+          <dl class="perm-grid">
+            <div>
+              <dt>Camera</dt>
+              <dd id="cameraPermission">Unknown</dd>
+            </div>
+            <div>
+              <dt>Microphone</dt>
+              <dd id="microphonePermission">Unknown</dd>
+            </div>
+          </dl>
+          <p id="setupMessage" class="setup-message">Start the local pipeline, then enable the camera when you are ready.</p>
+          <p id="mediaError" class="error-text hidden"></p>
+        </section>
+
+        <section class="card panel">
+          <div class="panel-head">
+            <h2>Diagnostics</h2>
+            <span class="muted">Live</span>
+          </div>
+          <dl class="diag-grid">
+            <div><dt>Pipeline</dt><dd id="diagPipeline">Starting</dd></div>
+            <div><dt>Hand model</dt><dd id="diagHand">Pending</dd></div>
+            <div><dt>Segmentation</dt><dd id="diagSegmentation">Pending</dd></div>
+            <div><dt>WASM runtime</dt><dd id="diagWasm">Checking</dd></div>
+            <div><dt>Renderer</dt><dd id="diagRenderer">Pending</dd></div>
+            <div><dt>FPS</dt><dd id="diagFps">-</dd></div>
+            <div><dt>Processing</dt><dd id="diagCost">-</dd></div>
+            <div><dt>Mask coverage</dt><dd id="diagMask">-</dd></div>
+            <div><dt>Gesture detector</dt><dd id="diagDetector">-</dd></div>
+            <div><dt>Audio analyzer</dt><dd id="diagAudio">-</dd></div>
+            <div><dt>Microphone state</dt><dd id="diagMic">-</dd></div>
+            <div><dt>Room plate</dt><dd id="diagPlate">-</dd></div>
+            <div class="wide"><dt>Last error</dt><dd id="diagError">None</dd></div>
+          </dl>
+        </section>
+
+        <section class="card panel logs-card">
+          <div class="panel-head">
+            <h2>Activity log</h2>
+            <button id="clearLogBtn" class="ghost tiny" type="button">Clear</button>
+          </div>
+          <ol id="logList" class="log-list"></ol>
+        </section>
+      </aside>
+    </main>
+
+    <div id="toast" class="toast hidden" role="status"></div>
+    <script type="module" src="preview.js"></script>
+  </body>
+</html>

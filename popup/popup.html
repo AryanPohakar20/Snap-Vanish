@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Snap Vanish</title>
+    <link rel="stylesheet" href="../styles/theme.css" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <main class="popup">
+      <header class="topbar">
+        <div class="brand">
+          <span class="brand-mark" aria-hidden="true"></span>
+          <div>
+            <h1>Snap Vanish</h1>
+            <p>Local snap-to-vanish for meetings</p>
+          </div>
+        </div>
+        <label class="switch" title="Enable or pause Snap Vanish">
+          <input id="enabled" type="checkbox" aria-label="Enable Snap Vanish" />
+          <span></span>
+        </label>
+      </header>
+
+      <section class="card status-card" aria-live="polite">
+        <div class="status-head">
+          <span id="stateDot" class="dot connecting"></span>
+          <div class="status-copy">
+            <strong id="stateLabel">Loading...</strong>
+            <span id="stateDetail">Reading extension status</span>
+          </div>
+        </div>
+        <dl class="meta-grid">
+          <div>
+            <dt>Meeting site</dt>
+            <dd id="siteValue">-</dd>
+          </div>
+          <div>
+            <dt>Camera</dt>
+            <dd id="cameraValue">-</dd>
+          </div>
+          <div>
+            <dt>Microphone</dt>
+            <dd id="micValue">-</dd>
+          </div>
+          <div>
+            <dt>Room plate</dt>
+            <dd id="plateValue">-</dd>
+          </div>
+        </dl>
+        <p id="errorText" class="error-text hidden"></p>
+      </section>
+
+      <section class="actions">
+        <button id="snapBtn" class="primary" type="button">Snap now</button>
+        <button id="previewBtn" type="button">Open test preview</button>
+      </section>
+
+      <section class="actions">
+        <button id="captureBtn" type="button">Capture room plate</button>
+        <button id="resetPlateBtn" class="danger" type="button">Reset plate</button>
+      </section>
+
+      <section class="card settings">
+        <label class="field" for="sensitivity">
+          <span class="field-label">Sensitivity <output id="sensitivityValue">55</output></span>
+          <input id="sensitivity" type="range" min="0" max="100" step="1" />
+          <span class="field-hint">Higher values react to lighter snaps and smaller hand motion.</span>
+        </label>
+
+        <label class="field" for="dustDuration">
+          <span class="field-label">Dust duration <output id="durationValue">1.4 s</output></span>
+          <input id="dustDuration" type="range" min="600" max="4000" step="50" />
+        </label>
+
+        <label class="field" for="dustDirection">
+          <span class="field-label">Dust direction</span>
+          <select id="dustDirection">
+            <option value="right">Right</option>
+            <option value="left">Left</option>
+            <option value="up">Up</option>
+            <option value="random">Random</option>
+          </select>
+        </label>
+
+        <div class="toggle-grid">
+          <label><input id="audioConfirmation" type="checkbox" /> Audio confirmation</label>
+          <label><input id="playSnapSound" type="checkbox" /> Snap sound</label>
+          <label><input id="autoCaptureBackground" type="checkbox" /> Auto-capture room plate</label>
+          <label><input id="persistBackground" type="checkbox" /> Remember background</label>
+          <label><input id="showDebugOverlay" type="checkbox" /> Debug overlay in meetings</label>
+        </div>
+      </section>
+
+      <footer class="footer">
+        <span id="version" class="muted">v1.0.0</span>
+        <button id="refreshBtn" class="ghost" type="button">Refresh status</button>
+      </footer>
+
+      <div id="toast" class="toast hidden" role="status"></div>
+    </main>
+
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>

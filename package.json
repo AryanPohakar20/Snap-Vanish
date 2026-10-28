@@ -1,0 +1,27 @@
+{
+  "name": "snap",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Snap Vanish - local snap-to-vanish camera effect for browser meetings",
+  "type": "module",
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "assets": "node scripts/generate-assets.mjs",
+    "build": "node scripts/build.mjs",
+    "watch": "node scripts/build.mjs --watch",
+    "validate": "node scripts/validate.mjs",
+    "test": "node tests/run-tests.mjs",
+    "test:unit": "node tests/unit.test.mjs",
+    "test:e2e": "node tests/extension.e2e.mjs",
+    "zip": "node scripts/package.mjs"
+  },
+  "dependencies": {
+    "@mediapipe/tasks-vision": "1.1.1"
+  },
+  "devDependencies": {
+    "esbuild": "0.28.2",
+    "playwright": "1.56.1"
+  }
+}
