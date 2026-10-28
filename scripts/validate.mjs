@@ -95,6 +95,7 @@ const REQUIRED_FILES = [
   'content/content.js',
   'content/content-src.js',
   'content/pipeline.js',
+  'content/absolute-cinema/controller.js',
   'content/vision-frame.html',
   'content/vision-frame.js',
   'lib/messages.js',
@@ -116,6 +117,7 @@ const REQUIRED_FILES = [
   'effects/shaders.js',
   'effects/state-machine.js',
   'assets/sounds/snap.wav',
+  'assets/images/CINEMA.jpeg',
   'assets/icons/icon16.png',
   'assets/icons/icon32.png',
   'assets/icons/icon48.png',
@@ -150,6 +152,11 @@ function checkPng(file) {
 function checkWav(file) {
   const data = readFileSync(file);
   return data.length > 44 && data.toString('ascii', 0, 4) === 'RIFF' && data.toString('ascii', 8, 12) === 'WAVE';
+}
+
+function checkJpeg(file) {
+  const data = readFileSync(file);
+  return data.length > 4 && data[0] === 0xff && data[1] === 0xd8 && data[2] === 0xff;
 }
 
 export function validate({ root = ROOT, quiet = false } = {}) {
@@ -232,6 +239,13 @@ export function validate({ root = ROOT, quiet = false } = {}) {
 
   if (existsSync(path.join(root, 'assets/sounds/snap.wav')) && !checkWav(path.join(root, 'assets/sounds/snap.wav'))) {
     errors.push('Not a valid WAV: assets/sounds/snap.wav');
+  }
+
+  if (
+    existsSync(path.join(root, 'assets/images/CINEMA.jpeg')) &&
+    !checkJpeg(path.join(root, 'assets/images/CINEMA.jpeg'))
+  ) {
+    errors.push('Not a valid JPEG: assets/images/CINEMA.jpeg');
   }
 
   const contentBundle = path.join(root, 'content/content.js');

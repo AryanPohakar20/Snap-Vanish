@@ -229,6 +229,32 @@ async function triggerSnap(source = 'manual') {
   return { ok: false, reason: 'opened-preview', previewTabId: created.id };
 }
 
+async function showAbsoluteCinema() {
+  const target = await findActiveTarget();
+  if (target.kind !== 'meeting' && target.kind !== 'preview') {
+    return {
+      ok: false,
+      reason: 'unsupported-tab',
+      message: 'Open Google Meet, Teams Web, Zoom Web or the local preview to use Absolute Cinema.'
+    };
+  }
+  try {
+    const response = await messageTab(target.tab, { type: MSG.ABSOLUTE_CINEMA_SHOW });
+    if (response && typeof response === 'object') return response;
+    return {
+      ok: false,
+      reason: 'no-response',
+      message: 'The page did not respond. Reload the tab and try again.'
+    };
+  } catch (error) {
+    return {
+      ok: false,
+      reason: 'no-content',
+      message: 'The page content script is not available. Reload the tab and try again.'
+    };
+  }
+}
+
 async function captureBackground() {
   const target = await findActiveTarget();
   if (target.kind === 'meeting' || target.kind === 'preview') {
@@ -406,6 +432,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 
   if (type === MSG.TRIGGER_SNAP) {
     triggerSnap(message.source || 'popup').then(sendResponse).catch((error) =>
+      sendResponse({ ok: false, error: error.message })
+    );
+    return true;
+  }
+
+  if (type === MSG.ABSOLUTE_CINEMA_SHOW) {
+    showAbsoluteCinema().then(sendResponse).catch((error) =>
       sendResponse({ ok: false, error: error.message })
     );
     return true;

@@ -7,6 +7,10 @@ import { thresholdsForSensitivity, TransientGate } from '../audio/audio-analyzer
 import { MuteController } from '../audio/mute-controller.js';
 import { StateMachine, STATES, UI_STATES } from '../effects/state-machine.js';
 import { sensitivityToThresholds } from '../vision/snap-detector.js';
+import {
+  ABSOLUTE_CINEMA_CYCLE_MS,
+  createAbsoluteCinemaController
+} from '../content/absolute-cinema/controller.js';
 
 function memoryStorage(initial = {}) {
   const data = { ...initial };
@@ -230,4 +234,122 @@ test('snap detector sensitivity thresholds are monotonic', () => {
   assert.ok(low.speedThreshold > high.speedThreshold);
   assert.ok(low.confidenceThreshold > high.confidenceThreshold);
   assert.ok(low.cooldownMs > high.cooldownMs);
+});
+
+function fakeClock() {
+  let now = 0;
+  let nextId = 1;
+  const tasks = new Map();
+  return {
+    setTimeout(fn, delay) {
+      const id = nextId++;
+      tasks.set(id, { at: now + Math.max(0, delay), fn });
+      return id;
+    },
+    clearTimeout(id) {
+      tasks.delete(id);
+    },
+    advance(ms) {
+      now += Math.max(0, ms);
+      let ran = true;
+      while (ran) {
+        ran = false;
+        const due = [...tasks.entries()]
+          .filter(([, task]) => task.at <= now)
+          .sort((a, b) => a[1].at - b[1].at);
+        for (const [id, task] of due) {
+          if (!tasks.has(id)) continue;
+          tasks.delete(id);
+          task.fn();
+          ran = true;
+        }
+      }
+    }
+  };
+}
+
+test('absolute cinema controller expires once after the configured cycle', () => {
+  const clock = fakeClock();
+  const stops = [];
+  const controller = createAbsoluteCinemaController({
+    duration: ABSOLUTE_CINEMA_CYCLE_MS,
+    onStop: (event) => stops.push(event),
+    setTimeoutFn: clock.setTimeout,
+    clearTimeoutFn: clock.clearTimeout
+  });
+
+  const started = controller.start();
+  assert.equal(started.restarted, false);
+  assert.equal(controller.isActive(), true);
+  clock.advance(ABSOLUTE_CINEMA_CYCLE_MS - 1);
+  assert.equal(controller.isActive(), true);
+  assert.equal(stops.length, 0);
+  clock.advance(1);
+  assert.equal(controller.isActive(), false);
+  assert.deepEqual(stops, [{ reason: 'expired' }]);
+});
+
+test('absolute cinema repeated activation restarts the single timer', () => {
+  const clock = fakeClock();
+  const stops = [];
+  const controller = createAbsoluteCinemaController({
+    duration: ABSOLUTE_CINEMA_CYCLE_MS,
+    onStop: (event) => stops.push(event),
+    setTimeoutFn: clock.setTimeout,
+    clearTimeoutFn: clock.clearTimeout
+  });
+
+  controller.start();
+  clock.advance(3000);
+  const restarted = controller.start();
+  assert.equal(restarted.restarted, true);
+  clock.advance(3000);
+  assert.equal(controller.isActive(), true);
+  assert.equal(stops.length, 0);
+  clock.advance(2000);
+  assert.equal(controller.isActive(), false);
+  assert.equal(stops.length, 1);
+  clock.advance(10000);
+  assert.equal(stops.length, 1);
+});
+
+test('absolute cinema cancel and dispose prevent stale expiry callbacks', () => {
+  const clock = fakeClock();
+  const stops = [];
+  const controller = createAbsoluteCinemaController({
+    duration: 1000,
+    onStop: (event) => stops.push(event),
+    setTimeoutFn: clock.setTimeout,
+    clearTimeoutFn: clock.clearTimeout
+  });
+
+  controller.start();
+  clock.advance(400);
+  assert.equal(controller.cancel(), true);
+  assert.equal(controller.isActive(), false);
+  controller.start();
+  clock.advance(400);
+  controller.dispose();
+  clock.advance(5000);
+  assert.equal(controller.isActive(), false);
+  assert.equal(stops.length, 0);
+});
+
+test('absolute cinema manual stop only fires while active', () => {
+  const clock = fakeClock();
+  const stops = [];
+  const controller = createAbsoluteCinemaController({
+    duration: 1000,
+    onStop: (event) => stops.push(event),
+    setTimeoutFn: clock.setTimeout,
+    clearTimeoutFn: clock.clearTimeout
+  });
+
+  assert.equal(controller.stop('manual').wasActive, false);
+  assert.equal(stops.length, 0);
+  controller.start();
+  assert.equal(controller.stop('manual').wasActive, true);
+  assert.deepEqual(stops, [{ reason: 'manual' }]);
+  clock.advance(2000);
+  assert.equal(stops.length, 1);
 });

@@ -70,7 +70,8 @@
         "lib/mediapipe/wasm/*",
         "vision/models/*",
         "audio/snap-worklet.js",
-        "assets/sounds/*"
+        "assets/sounds/*",
+        "assets/images/*"
       ],
       "matches": [
         "https://meet.google.com/*",

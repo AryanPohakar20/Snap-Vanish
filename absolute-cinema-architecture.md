@@ -1,246 +1,223 @@
 # Snap Vanish — Absolute Cinema Feature Architecture
 
-**Document type:** Feature architecture specification  
-**Feature:** Absolute Cinema meme overlay  
-**Parent extension:** Snap Vanish (Chrome Extension, Manifest V3)  
-**Status:** Proposed design, ready for implementation
+**Document type:** Implemented feature architecture
+**Feature:** Absolute Cinema outgoing-camera render mode
+**Parent extension:** Snap Vanish (Chrome Extension, Manifest V3)
+**Status:** Implemented; automated render-mode tests pass
 
 ---
 
 ## 1. Purpose
 
-Add **Absolute Cinema** as an independent feature inside the existing Snap Vanish Chrome extension.
+Absolute Cinema is an independent feature of Snap Vanish.
 
-When the user clicks a dedicated **🎬 Absolute Cinema** button in the extension popup, the meme appears as a local overlay on the active webpage for five seconds and then disappears automatically.
+When the user clicks **Absolute Cinema** in the extension popup, the bundled meme is drawn into the extension's existing outgoing camera canvas for five seconds. Remote meeting participants see the meme because that canvas already supplies the outgoing video track. The normal camera or Snap Vanish output resumes automatically when the cycle ends.
 
-The feature is separate from the existing finger-snap disappearance effect.
+This is a **render mode**, not a webpage overlay. It does not create a second camera stream, replace the outgoing track, or touch the microphone.
 
 ## 2. Goals
 
-- Provide a dedicated button in the existing extension popup.
-- Show a local webpage overlay for five seconds.
-- Use a short cinematic entrance and exit animation.
-- Support repeated activation without creating duplicate overlays.
-- Keep the meme image bundled locally with the extension.
-- Clean up the overlay, timers, and event listeners reliably.
-- Preserve all existing Snap Vanish functionality.
+- Provide a dedicated popup button.
+- Render the bundled meme in the existing outgoing camera canvas for five seconds.
+- Make the meme visible to remote participants through the existing capture stream.
+- Keep the outgoing video track, microphone state and pipeline lifecycle intact.
+- Restart cleanly on repeated activation using one timer.
+- Reject stale timer callbacks and stale deactivation messages.
+- Preserve hard isolation from Snap Vanish gesture detection, segmentation, background reconstruction, particles and audio handling.
 
 ## 3. Non-goals
 
-This feature will **not**:
+This feature does not:
 
-- Trigger or depend on finger-snap detection.
-- Modify the processed camera feed or outgoing video track.
-- Mute, unmute, or otherwise control the microphone.
-- Add sound effects, particle effects, or unrelated features.
-- Broadcast the meme to meeting participants.
-- Require a remote image or runtime network request.
+- Insert a DOM overlay into the meeting page.
+- Create or replace a camera track.
+- Call `getUserMedia` a second time.
+- Mute, unmute or otherwise change microphone state.
+- Depend on finger-snap detection.
+- Fetch an image or any other resource from the network.
+- Change Snap Vanish settings or gesture behavior.
 
 ## 4. User flow
 
-1. The user opens the Snap Vanish popup.
-2. The user clicks **🎬 Absolute Cinema**.
-3. The popup sends a dedicated activation message using the extension's existing messaging mechanism.
-4. The active tab's content script validates the request and creates or reuses the overlay.
-5. The meme appears with a brief fade-in and subtle zoom.
-6. The overlay remains visible for a total display cycle of approximately five seconds, including the exit animation.
-7. The overlay fades out and is removed.
-8. The page returns to its previous appearance.
+1. The user clicks **Absolute Cinema** in the Snap Vanish popup or on the in-meeting overlay.
+2. The popup sends `ABSOLUTE_CINEMA_SHOW` through the existing background routing; the overlay invokes the content-script activation path directly.
+3. The active meeting content script prepares the bundled image and activates the meeting adapter.
+4. The adapter pre-mirrors the meme inside an isolated canvas transform and draws it into the existing outgoing canvas on every frame.
+5. The meme remains visible for five seconds.
+6. The content script's single authoritative timer expires and deactivates the render mode.
+7. The adapter immediately resumes drawing the current camera or Snap Vanish output.
 
-If the user clicks the button while the meme is already visible, the current display cycle restarts. There must never be more than one overlay instance per page.
+Repeated clicks cancel the previous timer and start a new five-second cycle. No duplicate timers, streams, overlays or tracks are created.
 
 ## 5. Architecture
 
 ```mermaid
 flowchart TD
-    A[Snap Vanish Popup] -->|Click Absolute Cinema| B[Popup Handler]
-    B -->|ABSOLUTE_CINEMA_SHOW| C[Existing Extension Messaging]
-    C --> D{Supported page and content script available?}
-    D -->|No| E[Show a helpful popup error]
-    D -->|Yes| F[Absolute Cinema Controller]
-    F --> G[Overlay Renderer]
-    G --> H[Local Meme Asset]
-    F --> I[Single Five-Second Timer]
-    I --> J[Exit Animation and Cleanup]
-    J --> K[Restore Normal Page Appearance]
-    X[Existing Snap Vanish Systems] -. Remain isolated .- F
+    A[Snap Vanish Popup] -->|ABSOLUTE_CINEMA_SHOW| B[Background routing]
+    B --> C[Meeting content script]
+    C -->|fetch bundled asset| D[Local extension asset]
+    C -->|ImageBitmap + modeId| E[MAIN-world meeting adapter]
+    E --> F[Existing outgoing camera canvas]
+    F --> G[Existing canvas.captureStream track]
+    G --> H[Meeting participants]
+    C --> I[One authoritative five-second timer]
+    I -->|deactivate with modeId| E
+    E -->|resume| J[Raw camera or Snap Vanish output]
+    K[Local preview] -->|same render mode| L[Preview display canvas]
 ```
 
 ### Components and responsibilities
 
 | Component | Responsibility |
 |---|---|
-| Existing popup UI | Hosts the new button without replacing existing controls. |
-| Popup handler | Sends the activation request and presents errors if delivery fails. |
-| Existing messaging layer | Routes the dedicated action to the content script. |
-| Absolute Cinema controller | Manages activation state, timer restart, duplicate prevention, and cleanup. |
-| Overlay renderer | Creates and removes the visual overlay and applies animations. |
-| Local meme asset | Supplies the image without runtime network access. |
+| Popup | Sends the activation request and reports errors. |
+| Background | Routes the request only to a supported meeting or preview tab. |
+| Content script | Loads the local image, owns the timer, coordinates activation/deactivation, and rejects stale results. |
+| Meeting adapter | Stores the active meme bitmap, switches the final canvas draw path, and guards against stale stops. |
+| Preview | Uses the same timer/render semantics on its local display canvas. |
+| Local asset | `assets/images/CINEMA.jpeg`; loaded from the extension package only. |
 
-Reuse existing components where possible. These are logical responsibilities; they do not mandate creating every component as a separate file.
+## 6. Authoritative timer and stale-callback policy
 
-## 6. Suggested file layout
+The content script owns the only display timer:
 
-Adapt this layout to the repository after inspecting its actual structure. Do not create duplicate popup or messaging infrastructure if it already exists.
+- Duration: **5,000 ms**.
+- The timer starts only after the adapter acknowledges activation, so the five seconds describe actual visible meme time.
+- Repeated activation cancels the old timer and starts a new cycle.
+- Every activation receives a monotonically increasing `modeId`.
+- A stale callback cannot stop a newer cycle because the controller checks its lifecycle token before calling `onStop`.
+- Deactivation messages carry the `modeId`; the adapter ignores a stop whose `modeId` is older than its current mode.
+- The adapter also stores a deadline derived from the acknowledged activation. This deadline is a safety guard, not a second user-facing timer, and it closes the mode if a deactivation message is ever lost.
 
-```text
-snap-vanish/
-├── popup/
-│   ├── popup.html                 # Existing popup; add the new button
-│   ├── popup.css                  # Existing styles; add isolated button styles
-│   └── popup.js                   # Existing handler; send activation message
-├── content/
-│   ├── content-src.js             # Existing content entry/bundle
-│   └── absolute-cinema/
-│       ├── controller.js          # Activation and timer lifecycle
-│       ├── overlay.js              # Overlay creation and removal
-│       └── absolute-cinema.css    # Isolated visual styles
-├── assets/
-│   └── images/
-│       └── absolute-cinema.webp   # Bundled local meme image
-├── background.js                 # Reuse only if current routing requires it
-├── manifest.json                 # Change only if genuinely required
-└── ...existing files
-```
+## 7. Rendering
 
-If the current project bundles content scripts, import the new modules into the existing entry point and use the existing build process. Do not rely on unsupported runtime imports.
+The final outgoing render switch is `StreamAdapter.tick()` in `content/meeting-adapter.js`:
 
-## 7. Message contract
+- If Absolute Cinema is active and its `ImageBitmap` is ready, the adapter draws only the meme using a contain fit.
+- The meme is drawn through an isolated `save()` / `setTransform()` / `translate()` / `scale(-1, 1)` / `restore()` path so it is pre-mirrored for meeting clients that horizontally mirror the outgoing camera image. The transform is scoped to the Absolute Cinema draw and never changes the normal camera or Snap Vanish rendering path.
+- Neither the raw camera frame nor a processed Snap Vanish frame is drawn over it.
+- The raw and processed paths are otherwise unchanged and resume immediately when the mode ends.
+- Frame processing and microphone analysis continue while the meme is active; the mode changes only the final visual composite.
+- The existing canvas and capture stream are reused. No track is stopped, replaced or recreated.
+- Expired processed frames are still closed on their normal schedule.
 
-Use the project's current message conventions. The following is a conceptual contract, not a requirement to replace the existing protocol.
+The local preview applies the same rule after its normal pipeline draw, so the preview and outgoing feed agree.
 
-### Request
+## 8. Conflict policy with Snap Vanish
+
+Absolute Cinema must safely coexist with an active Snap Vanish state:
+
+- The meme has visual priority over both the live camera and the processed Snap Vanish output.
+- The Snap Vanish state machine continues unchanged. A vanish that starts while the meme is visible still transitions to vanished.
+- Microphone handling, mute ownership, audio analysis, segmentation and background reconstruction continue unchanged.
+- When the five-second cycle ends, the adapter resumes the **current** Snap Vanish state. It does not reset, cancel or replay the snap animation.
+- The preview test exercises this policy by starting a vanish during the meme cycle and verifying that the meme remains visible until expiry, then the vanished frame resumes.
+
+## 9. Message contract
+
+All page messages use the existing `__snapVanish` channel and the content session identifier.
+
+### Activate
 
 ```json
 {
-  "action": "ABSOLUTE_CINEMA_SHOW"
+  "type": "SV_ABSOLUTE_CINEMA",
+  "active": true,
+  "modeId": 3,
+  "requestId": 3,
+  "durationMs": 5000,
+  "bitmap": "<ImageBitmap>"
 }
 ```
 
-### Expected behavior
+The `ImageBitmap` is transferred from the isolated content script to the MAIN-world adapter. No page-visible extension URL or remote request is required.
 
-- Accept the action only through the extension's existing trusted message flow.
-- Validate the message shape.
-- Invoke the Absolute Cinema controller.
-- Return a success or failure response if the existing messaging pattern supports responses.
-- Handle missing content scripts, unsupported tabs, and navigation races gracefully.
+### Deactivate
 
-Do not add a new service worker if the existing background service worker can route the action safely. Avoid new permissions unless a demonstrated requirement exists.
-
-## 8. Overlay behavior and timing
-
-### Lifecycle
-
-```mermaid
-stateDiagram-v2
-    [*] --> Hidden
-    Hidden --> Showing: User activates feature
-    Showing --> Visible: Entrance animation completes
-    Visible --> Exiting: Five-second deadline reached
-    Exiting --> Hidden: Overlay removed
-    Showing --> Showing: Repeated activation / restart timer
-    Visible --> Showing: Repeated activation / restart timer
-    Exiting --> Showing: Repeated activation / recreate or reuse overlay
+```json
+{
+  "type": "SV_ABSOLUTE_CINEMA",
+  "active": false,
+  "modeId": 3
+}
 ```
 
-### Timing rules
+### Acknowledgment
 
-- Target display duration: **5,000 milliseconds** from activation to the start of cleanup, with the exit animation included in the five-second cycle.
-- Use one authoritative timer per page.
-- Repeated activation restarts the timer instead of creating a second overlay.
-- Prevent stale timer callbacks from removing a newly activated overlay. A lifecycle token or equivalent guard may be used.
-- Use a short entrance animation and a short exit animation.
-- Use a bounded cleanup fallback so an animation event that never fires cannot leave the overlay behind.
-- On page navigation or document teardown, allow the browser to discard the overlay and ensure no persistent background resources are created.
+```json
+{
+  "type": "SV_ABSOLUTE_CINEMA_RESULT",
+  "requestId": 3,
+  "modeId": 3,
+  "ok": true,
+  "active": true,
+  "restarted": false,
+  "durationMs": 5000
+}
+```
 
-## 9. Visual and accessibility requirements
+Failure responses use `ok: false` with a reason such as `no-camera`, `image-unavailable`, `adapter-timeout` or `adapter-not-ready`.
 
-- Display the meme prominently but keep the design restrained.
-- Use a short fade-in, slight zoom, and fade-out.
-- Use local CSS and a local image asset.
-- Prefer a Shadow DOM root if compatible with the existing codebase, to prevent webpage styles from changing the overlay.
-- Use a high stacking order without modifying the host page's layout.
-- Do not intercept pointer events unnecessarily; the overlay should not block page controls.
-- Respect reduced-motion preferences where practical.
-- Ensure the image has appropriate alternative text if represented as an image element.
-- Avoid injecting global CSS into the host page.
+## 10. Error handling
 
-## 10. Strict isolation from existing Snap Vanish
+Handle these cases without interrupting Snap Vanish:
 
-Absolute Cinema must not change or depend on:
+- Unsupported active tab: background returns `unsupported-tab`.
+- Content script unavailable: background returns `no-content`.
+- Adapter still starting: content returns `adapter-not-ready`.
+- No live camera adapter: adapter returns `no-camera`.
+- Image preparation failure: content returns `image-unavailable`.
+- Adapter does not acknowledge: content returns `adapter-timeout` and sends a deactivation.
+- Page navigation or extension reload: the page context and adapter are torn down; the adapter deadline bounds any orphaned mode.
+- Rapid repeated clicks: the newest activation wins; stale acknowledgments do not start a timer.
+
+## 11. Strict isolation
+
+Absolute Cinema does not change or depend on:
 
 - Finger or hand tracking.
-- Snap gesture detection or sensitivity settings.
+- Snap gesture detection or sensitivity.
 - Person segmentation.
 - Background reconstruction.
-- WebGL particles, shaders, or dust effects.
-- Camera-track replacement or restoration.
-- Google Meet, Microsoft Teams, or Zoom meeting adapters.
-- Microphone analysis, mute/unmute logic, or audio worklets.
-- Existing keyboard shortcuts or settings.
-- Existing feature state or message contracts, except for the additive activation action.
+- WebGL particles, shaders or dust effects.
+- Camera-track replacement logic.
+- Meeting-site adapter behavior.
+- Microphone analysis, mute/unmute handling or audio worklets.
+- Existing keyboard shortcuts, storage keys or settings.
 
-The overlay must be a **DOM-based local webpage overlay**, never a layer in the processed camera canvas.
+The only shared surface is the final outgoing-canvas composition and an additive page message type.
 
-Prefer additive changes. If a shared file must be modified, make the smallest possible change and document the reason.
+## 12. Testing
 
-## 11. Error handling
+Automated coverage:
 
-Handle these cases gracefully:
+- Unit tests for one-shot expiry, repeated activation restart, cancel/dispose stale guards and manual stop.
+- Browser test against a fake Google Meet page that obtains a real fake-media stream, verifies the outgoing canvas shows the meme within pixel tolerance, verifies a repeated activation extends the cycle, and verifies the camera returns after expiry.
+- The same browser test verifies the outgoing video track id and microphone track state are unchanged.
+- The local preview test verifies the meme appears on `#displayCanvas`, keeps visual priority during a vanish, and restores the vanished frame afterward.
+- The browser test verifies the `no-camera` error and unsupported-tab routing.
 
-- The active tab is a browser-internal page or otherwise cannot host a content script.
-- The content script is not loaded or cannot receive messages.
-- The local image asset is missing or fails to load.
-- The user clicks repeatedly.
-- The page navigates or closes while the overlay is visible.
-- The extension is reloaded during development.
+Useful commands:
 
-A failed Absolute Cinema activation must not interrupt Snap Vanish or other extension controls.
+```powershell
+npm run build
+npm run test:unit
+npm run test:e2e
+npm test
+```
 
-## 12. Testing plan
+Real Google Meet, Teams or Zoom remote visibility must be verified manually with a second participant. Automated fake-media rendering is not a substitute for that check.
 
-### Feature tests
-
-- [ ] Popup contains a distinct Absolute Cinema button.
-- [ ] Clicking the button displays exactly one overlay.
-- [ ] Overlay uses the bundled local image.
-- [ ] Display cycle lasts approximately five seconds, including exit animation.
-- [ ] Overlay disappears automatically.
-- [ ] Repeated clicks restart the timer.
-- [ ] No duplicate overlays or stale timers are left behind.
-- [ ] Unsupported tabs show a useful error.
-- [ ] No network request is needed to display the meme.
-- [ ] Navigation removes the old page's overlay naturally and leaves no persistent resources.
-
-### Regression tests
-
-- [ ] Snap detection still works.
-- [ ] Existing disappearance and restoration effects still work.
-- [ ] Camera-track processing is unchanged.
-- [ ] Microphone controls are unchanged.
-- [ ] Existing settings and shortcuts still work.
-- [ ] Supported meeting adapters retain their existing behavior.
-
-Run the current build, lint, and test commands. Test in a real browser where available. Do not claim a real meeting test unless one was actually performed.
-
-## 13. Implementation sequence
-
-1. Audit the current repository and identify the existing popup, content entry point, messaging protocol, and build process.
-2. Implement the isolated overlay renderer and controller.
-3. Add the popup button and activation message.
-4. Bundle the local meme asset and new modules through the existing build process.
-5. Add focused tests for timer behavior, repeat activation, cleanup, and unsupported tabs.
-6. Run the build and regression checks.
-7. Report all added and modified files and any unverified behavior.
-
-## 14. Definition of done
+## 13. Definition of done
 
 The feature is complete when:
 
 - A separate popup button activates Absolute Cinema.
-- The meme appears locally on the active webpage and disappears after a five-second cycle.
-- Repeated clicks restart the cycle without duplicating overlays.
-- Timers and DOM resources are cleaned up.
-- No camera or microphone behavior changes.
-- Existing Snap Vanish features pass the available regression checks.
-- Build and test outcomes are reported accurately.
+- The meme is rendered in the existing outgoing camera canvas for five seconds.
+- Remote-visible rendering uses the existing capture stream without track replacement.
+- Repeated clicks restart the cycle without duplicate timers or streams.
+- Stale timer callbacks and stale stop messages cannot restore the camera early or stop a newer cycle.
+- Snap Vanish state, microphone behavior and the camera pipeline continue during the meme cycle.
+- The adapter resumes the current camera/effect output after expiry.
+- Build, unit tests and render-mode browser tests pass.
+- Real-meeting visibility is reported as unverified unless a manual meeting test was actually performed.

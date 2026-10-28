@@ -1,6 +1,11 @@
 import { MSG, detectSiteFromUrl } from '../lib/messages.js';
 import { loadSettings, sanitizeSettings } from '../lib/settings.js';
 import { PLATE_META_KEY } from '../lib/storage-keys.js';
+import {
+  ABSOLUTE_CINEMA_CYCLE_MS,
+  ABSOLUTE_CINEMA_MEME_PATH,
+  createAbsoluteCinemaController
+} from './absolute-cinema/controller.js';
 
 const SITE = detectSiteFromUrl(location.href);
 
@@ -39,6 +44,22 @@ function start() {
   let lastRenderAt = 0;
   let renderTimer = null;
   let suppressMicInteraction = false;
+  let cinemaSequence = 0;
+  let cinemaModeId = 0;
+  let cinemaRequestCounter = 0;
+  let cinemaBlobPromise = null;
+  const cinemaPending = new Map();
+  const absoluteCinema = createAbsoluteCinemaController({
+    onStop: () => {
+      if (!cinemaModeId) return;
+      postToPage({
+        type: 'SV_ABSOLUTE_CINEMA',
+        active: false,
+        modeId: cinemaModeId,
+        session
+      });
+    }
+  });
 
   init().catch((error) => {
     console.error('[Snap Vanish] Content initialization failed:', error);
@@ -118,8 +139,10 @@ function start() {
   function postToPage(message, transfer) {
     try {
       window.postMessage({ __snapVanish: true, ...message }, '*', transfer || []);
+      return true;
     } catch (error) {
       console.warn('[Snap Vanish] postMessage failed:', error);
+      return false;
     }
   }
 
@@ -186,6 +209,16 @@ function start() {
     }
 
     if (data.__snapVanish !== true || event.source !== window) return;
+
+    if (data.type === 'SV_ABSOLUTE_CINEMA_RESULT') {
+      const pending = cinemaPending.get(data.requestId);
+      if (pending) {
+        clearTimeout(pending.timer);
+        cinemaPending.delete(data.requestId);
+        pending.resolve(data);
+      }
+      return;
+    }
 
     if (data.type === 'SV_ADAPTER_READY') {
       adapterReady = true;
@@ -446,6 +479,150 @@ function start() {
       .catch(() => {});
   }
 
+  function loadCinemaBlob() {
+    if (cinemaBlobPromise) return cinemaBlobPromise;
+    cinemaBlobPromise = fetch(chrome.runtime.getURL(ABSOLUTE_CINEMA_MEME_PATH))
+      .then((response) => {
+        if (!response.ok) {
+          throw new Error(`The Absolute Cinema image could not be loaded (${response.status}).`);
+        }
+        return response.blob();
+      })
+      .catch((error) => {
+        cinemaBlobPromise = null;
+        throw error;
+      });
+    return cinemaBlobPromise;
+  }
+
+  function requestPageAbsoluteCinema(payload, transfer, timeout = 3000) {
+    const requestId = ++cinemaRequestCounter;
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        cinemaPending.delete(requestId);
+        resolve({
+          ok: false,
+          reason: 'adapter-timeout',
+          message: 'The camera renderer did not respond. Reload the tab and try again.'
+        });
+      }, timeout);
+      cinemaPending.set(requestId, { resolve, timer });
+      if (
+        !postToPage(
+          {
+            ...payload,
+            requestId,
+            session
+          },
+          transfer
+        )
+      ) {
+        clearTimeout(timer);
+        cinemaPending.delete(requestId);
+        resolve({
+          ok: false,
+          reason: 'adapter-unavailable',
+          message: 'The meeting camera renderer is unavailable. Reload the tab and try again.',
+          transferFailed: true
+        });
+      }
+    });
+  }
+
+  async function showAbsoluteCinema() {
+    if (!adapterReady) {
+      return {
+        ok: false,
+        reason: 'adapter-not-ready',
+        message: 'The meeting camera patch is still starting. Try again in a moment.'
+      };
+    }
+
+    if (typeof createImageBitmap !== 'function') {
+      return {
+        ok: false,
+        reason: 'image-unavailable',
+        message: 'This browser cannot prepare the Absolute Cinema image.'
+      };
+    }
+
+    absoluteCinema.cancel();
+    const modeId = ++cinemaSequence;
+    cinemaModeId = modeId;
+
+    let bitmap;
+    try {
+      const blob = await loadCinemaBlob();
+      bitmap = await createImageBitmap(blob);
+    } catch (error) {
+      if (modeId === cinemaSequence) {
+        postToPage({
+          type: 'SV_ABSOLUTE_CINEMA',
+          active: false,
+          modeId,
+          session
+        });
+      }
+      return { ok: false, reason: 'image-unavailable', message: error.message };
+    }
+
+    if (modeId !== cinemaSequence) {
+      try {
+        bitmap.close();
+      } catch {
+        // Ignore.
+      }
+      return { ok: true, superseded: true };
+    }
+
+    const response = await requestPageAbsoluteCinema(
+      {
+        type: 'SV_ABSOLUTE_CINEMA',
+        active: true,
+        modeId,
+        durationMs: ABSOLUTE_CINEMA_CYCLE_MS,
+        bitmap
+      },
+      [bitmap]
+    );
+
+    if (response.transferFailed) {
+      try {
+        bitmap.close();
+      } catch {
+        // Ignore.
+      }
+    }
+
+    if (modeId !== cinemaSequence) {
+      return { ok: true, superseded: true };
+    }
+
+    if (!response || response.ok !== true || response.superseded) {
+      postToPage({
+        type: 'SV_ABSOLUTE_CINEMA',
+        active: false,
+        modeId,
+        session
+      });
+      return {
+        ok: false,
+        reason: (response && (response.reason || (response.superseded ? 'superseded' : null))) || 'activation-failed',
+        message:
+          (response && response.message) ||
+          'The camera renderer could not start Absolute Cinema. Reload the tab and try again.'
+      };
+    }
+
+    absoluteCinema.start();
+    return {
+      ok: true,
+      restarted: Boolean(response.restarted),
+      modeId,
+      site: SITE
+    };
+  }
+
   function onRuntimeMessage(message, _sender, sendResponse) {
     if (!message) return false;
     if (message.target && message.target !== 'content') return false;
@@ -574,6 +751,15 @@ function start() {
       return false;
     }
 
+    if (message.type === MSG.ABSOLUTE_CINEMA_SHOW) {
+      showAbsoluteCinema()
+        .then((result) => sendResponse(result))
+        .catch((error) =>
+          sendResponse({ ok: false, reason: 'render-mode-error', message: error.message })
+        );
+      return true;
+    }
+
     return false;
   }
 
@@ -681,6 +867,10 @@ function start() {
   }
 
   function dispose() {
+    absoluteCinema.dispose();
+    cinemaModeId = 0;
+    for (const pending of cinemaPending.values()) clearTimeout(pending.timer);
+    cinemaPending.clear();
     if (handshakeTimer) clearInterval(handshakeTimer);
     if (visionTimeoutTimer) clearTimeout(visionTimeoutTimer);
     if (renderTimer) clearTimeout(renderTimer);
@@ -754,6 +944,13 @@ function start() {
         border-color: rgba(255, 224, 160, 0.7);
         font-weight: 650;
       }
+      button.cinema {
+        background: linear-gradient(180deg, rgba(255, 217, 138, 0.18), rgba(154, 103, 28, 0.16));
+        border-color: rgba(242, 185, 89, 0.45);
+        color: #f2c36e;
+        font-weight: 650;
+      }
+      button.cinema:hover { border-color: rgba(255, 217, 138, 0.72); }
       button:hover { filter: brightness(1.08); }
       .hint { margin-top: 7px; color: #8b93a6; font-size: 10.5px; }
       .warn {
@@ -807,6 +1004,9 @@ function start() {
         <button class="primary" data-role="snap" type="button">Snap</button>
         <button data-role="capture" type="button">Room plate</button>
       </div>
+      <div class="row">
+        <button class="cinema" data-role="cinema" type="button">Absolute Cinema</button>
+      </div>
       <div class="warn" data-role="warn" style="display:none"></div>
       <div class="debug" data-role="debug" style="display:none"></div>
       <div class="toast" data-role="toast"></div>
@@ -825,6 +1025,7 @@ function start() {
       toast: shadow.querySelector('[data-role="toast"]'),
       snap: shadow.querySelector('[data-role="snap"]'),
       capture: shadow.querySelector('[data-role="capture"]'),
+      cinema: shadow.querySelector('[data-role="cinema"]'),
       toastTimer: null
     };
 
@@ -862,6 +1063,24 @@ function start() {
           renderUi();
         })
         .catch((error) => showToast(error.message, 'error'));
+    });
+
+    refs.cinema.addEventListener('click', () => {
+      showAbsoluteCinema()
+        .then((result) => {
+          if (result && result.ok) {
+            if (!result.superseded) {
+              showToast('Absolute Cinema is live for five seconds.', 'success', 3000);
+            }
+          } else {
+            showToast(
+              (result && (result.message || result.reason)) || 'Absolute Cinema could not start.',
+              'error',
+              6000
+            );
+          }
+        })
+        .catch((error) => showToast(error.message, 'error', 6000));
     });
 
     return refs;

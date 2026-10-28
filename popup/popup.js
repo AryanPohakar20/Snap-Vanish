@@ -13,6 +13,7 @@ const els = {
   errorText: document.getElementById('errorText'),
   snapBtn: document.getElementById('snapBtn'),
   previewBtn: document.getElementById('previewBtn'),
+  cinemaBtn: document.getElementById('cinemaBtn'),
   captureBtn: document.getElementById('captureBtn'),
   resetPlateBtn: document.getElementById('resetPlateBtn'),
   sensitivity: document.getElementById('sensitivity'),
@@ -331,6 +332,20 @@ function bindEvents() {
       window.close();
     } else {
       showToast((response && response.error) || 'The preview could not be opened.', 'error');
+    }
+  });
+
+  els.cinemaBtn.addEventListener('click', async () => {
+    setBusy(els.cinemaBtn, true);
+    const response = await sendToBackground(MSG.ABSOLUTE_CINEMA_SHOW);
+    setBusy(els.cinemaBtn, false);
+    if (response && response.ok) {
+      showToast('Absolute Cinema is live on your outgoing camera for five seconds.', 'success', 3000);
+    } else {
+      const message =
+        (response && (response.message || response.reason || response.error)) ||
+        'Absolute Cinema could not start.';
+      showToast(message, 'error');
     }
   });
 

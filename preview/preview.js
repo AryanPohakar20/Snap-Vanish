@@ -1,7 +1,19 @@
 import { SnapVanishPipeline } from '../content/pipeline.js';
+import {
+  ABSOLUTE_CINEMA_CYCLE_MS,
+  ABSOLUTE_CINEMA_MEME_PATH,
+  createAbsoluteCinemaController
+} from '../content/absolute-cinema/controller.js';
 import { DEFAULT_SETTINGS, loadSettings, sanitizeSettings } from '../lib/settings.js';
 import { PLATE_KEY, PLATE_META_KEY } from '../lib/storage-keys.js';
 import { MSG } from '../lib/messages.js';
+
+const absoluteCinema = createAbsoluteCinemaController({
+  onStop: () => renderStage()
+});
+let absoluteCinemaImage = null;
+let absoluteCinemaImagePromise = null;
+let absoluteCinemaRequest = 0;
 
 const els = {
   video: document.getElementById('sourceVideo'),
@@ -531,6 +543,8 @@ async function enableMedia() {
 
 function stopMedia() {
   running = false;
+  absoluteCinemaRequest += 1;
+  absoluteCinema.stop('camera-stopped');
   if (rafId) {
     cancelAnimationFrame(rafId);
     rafId = 0;
@@ -580,6 +594,97 @@ function drawRawVideo() {
   displayCtx.drawImage(els.video, 0, 0, width, height);
 }
 
+function loadAbsoluteCinemaImage() {
+  if (absoluteCinemaImage) return Promise.resolve(absoluteCinemaImage);
+  if (absoluteCinemaImagePromise) return absoluteCinemaImagePromise;
+  absoluteCinemaImagePromise = new Promise((resolve, reject) => {
+    const image = new Image();
+    let settled = false;
+    let timer = 0;
+    const finish = (error) => {
+      if (settled) return;
+      settled = true;
+      if (timer) clearTimeout(timer);
+      image.onload = null;
+      image.onerror = null;
+      if (error) reject(error);
+      else resolve(image);
+    };
+    timer = setTimeout(() => finish(new Error('The Absolute Cinema image timed out.')), 3000);
+    image.onload = () => finish(null);
+    image.onerror = () => finish(new Error('The Absolute Cinema image could not be loaded.'));
+    image.decoding = 'async';
+    image.src = chrome.runtime.getURL(ABSOLUTE_CINEMA_MEME_PATH);
+    if (image.complete && image.naturalWidth > 0) finish(null);
+  })
+    .then((image) => {
+      absoluteCinemaImage = image;
+      absoluteCinemaImagePromise = null;
+      return image;
+    })
+    .catch((error) => {
+      absoluteCinemaImagePromise = null;
+      throw error;
+    });
+  return absoluteCinemaImagePromise;
+}
+
+function drawAbsoluteCinemaFrame() {
+  if (!absoluteCinema.isActive() || !absoluteCinemaImage) return;
+  if (!displayCtx || !els.display) return;
+  const width = els.display.width;
+  const height = els.display.height;
+  if (!width || !height) return;
+  const sourceWidth = absoluteCinemaImage.naturalWidth;
+  const sourceHeight = absoluteCinemaImage.naturalHeight;
+  if (!sourceWidth || !sourceHeight) return;
+  displayCtx.fillStyle = '#000';
+  displayCtx.fillRect(0, 0, width, height);
+  const scale = Math.min(width / sourceWidth, height / sourceHeight);
+  const drawWidth = sourceWidth * scale;
+  const drawHeight = sourceHeight * scale;
+  displayCtx.drawImage(
+    absoluteCinemaImage,
+    (width - drawWidth) / 2,
+    (height - drawHeight) / 2,
+    drawWidth,
+    drawHeight
+  );
+}
+
+async function showAbsoluteCinema() {
+  if (!running || !els.video || els.video.readyState < 2) {
+    return {
+      ok: false,
+      reason: 'no-camera',
+      message: 'Enable the camera before using Absolute Cinema.'
+    };
+  }
+
+  const requestId = ++absoluteCinemaRequest;
+  try {
+    await loadAbsoluteCinemaImage();
+  } catch (error) {
+    if (requestId === absoluteCinemaRequest) {
+      return { ok: false, reason: 'image-unavailable', message: error.message };
+    }
+    return { ok: true, superseded: true };
+  }
+
+  if (requestId !== absoluteCinemaRequest) return { ok: true, superseded: true };
+  if (!running || !els.video || els.video.readyState < 2) {
+    return {
+      ok: false,
+      reason: 'no-camera',
+      message: 'The camera stopped before Absolute Cinema could start.'
+    };
+  }
+
+  const result = absoluteCinema.start();
+  renderStage();
+  return { ok: true, restarted: result.restarted, durationMs: ABSOLUTE_CINEMA_CYCLE_MS };
+}
+
 function startLoop() {
   if (rafId) return;
   const tick = () => {
@@ -591,20 +696,26 @@ function startLoop() {
 
     if (!pipelineReady || !pipeline) {
       drawRawVideo();
+      drawAbsoluteCinemaFrame();
       return;
     }
 
     try {
       const output = pipeline.processFrame(els.video, now);
-      if (!output) return;
+      if (!output) {
+        drawAbsoluteCinemaFrame();
+        return;
+      }
       if (els.display.width !== output.width || els.display.height !== output.height) {
         els.display.width = output.width;
         els.display.height = output.height;
       }
       displayCtx.drawImage(output, 0, 0, els.display.width, els.display.height);
+      drawAbsoluteCinemaFrame();
       maybeRunPendingTrigger(now);
     } catch (error) {
       addLog('error', `Frame processing failed: ${error.message}`);
+      drawAbsoluteCinemaFrame();
     }
   };
   rafId = requestAnimationFrame(tick);
@@ -693,6 +804,12 @@ async function resetPlate() {
 }
 
 function renderStage(statusOverride) {
+  if (absoluteCinema.isActive()) {
+    els.stageDot.className = 'dot ready';
+    els.stageLabel.textContent = 'Absolute Cinema';
+    setStageHint('The meme is live on your outgoing camera for five seconds.');
+    return;
+  }
   const status = statusOverride || (pipeline ? pipeline.getStatus() : null);
   let dot = 'connecting';
   let label = 'Starting local vision...';
@@ -952,6 +1069,17 @@ function onRuntimeMessage(message, _sender, sendResponse) {
     return false;
   }
 
+  if (message.type === MSG.ABSOLUTE_CINEMA_SHOW) {
+    showAbsoluteCinema()
+      .then((result) =>
+        sendResponse({ ...result, site: { id: 'preview', name: 'Local preview' } })
+      )
+      .catch((error) =>
+        sendResponse({ ok: false, reason: 'render-mode-error', message: error.message })
+      );
+    return true;
+  }
+
   return false;
 }
 
@@ -1056,6 +1184,8 @@ async function boot() {
 }
 
 function cleanup() {
+  absoluteCinemaRequest += 1;
+  absoluteCinema.dispose();
   if (diagnosticsTimer) clearInterval(diagnosticsTimer);
   if (saveTimer) clearTimeout(saveTimer);
   if (toastTimer) clearTimeout(toastTimer);

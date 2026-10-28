@@ -29,8 +29,20 @@
     lastAudioReportAt: 0,
     lastError: null,
     unsupportedReason: null,
-    readyAnnounced: false
+    readyAnnounced: false,
+    absoluteCinema: {
+      active: false,
+      modeId: 0,
+      deadline: 0,
+      image: null
+    }
   };
+
+  const ABSOLUTE_CINEMA_DEFAULT_MS = 5000;
+  const ABSOLUTE_CINEMA_MIN_MS = 1000;
+  const ABSOLUTE_CINEMA_MAX_MS = 15000;
+
+  document.documentElement.dataset.snapVanishAbsoluteCinema = 'off';
 
   function post(message, transfer) {
     const payload = { __snapVanish: true, session: state.session, ...message };
@@ -89,6 +101,164 @@
       }
     }
     if (changed) reportAudioState(true);
+  }
+
+  function hasLiveCameraAdapter() {
+    for (const adapter of state.adapters) {
+      if (
+        !adapter.cleaned &&
+        adapter.originalVideoTrack &&
+        adapter.originalVideoTrack.readyState === 'live'
+      ) {
+        return true;
+      }
+    }
+    return false;
+  }
+
+  function closeAbsoluteCinemaImage() {
+    const image = state.absoluteCinema.image;
+    state.absoluteCinema.image = null;
+    if (image && typeof image.close === 'function') {
+      try {
+        image.close();
+      } catch {
+        // Ignore.
+      }
+    }
+  }
+
+  function setAbsoluteCinemaActive(active) {
+    state.absoluteCinema.active = active;
+    if (!active) {
+      state.absoluteCinema.deadline = 0;
+      closeAbsoluteCinemaImage();
+    }
+    document.documentElement.dataset.snapVanishAbsoluteCinema = active ? 'on' : 'off';
+  }
+
+  function expireAbsoluteCinema(now) {
+    if (!state.absoluteCinema.active) return;
+    if (now < state.absoluteCinema.deadline) return;
+    setAbsoluteCinemaActive(false);
+  }
+
+  function isDrawableImage(image) {
+    return Boolean(
+      image &&
+        typeof image.close === 'function' &&
+        Number(image.width) > 0 &&
+        Number(image.height) > 0
+    );
+  }
+
+  function clampAbsoluteCinemaDuration(value) {
+    const duration = Number(value);
+    if (!Number.isFinite(duration)) return ABSOLUTE_CINEMA_DEFAULT_MS;
+    return Math.min(ABSOLUTE_CINEMA_MAX_MS, Math.max(ABSOLUTE_CINEMA_MIN_MS, duration));
+  }
+
+  function activateAbsoluteCinema(data) {
+    const modeId = Number(data.modeId) || 0;
+    const requestId = data.requestId;
+
+    if (modeId < state.absoluteCinema.modeId) {
+      if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
+      post({
+        type: 'SV_ABSOLUTE_CINEMA_RESULT',
+        requestId,
+        modeId,
+        ok: true,
+        active: state.absoluteCinema.active,
+        superseded: true
+      });
+      return;
+    }
+
+    if (!hasLiveCameraAdapter()) {
+      if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
+      setAbsoluteCinemaActive(false);
+      state.absoluteCinema.modeId = Math.max(state.absoluteCinema.modeId, modeId);
+      post({
+        type: 'SV_ABSOLUTE_CINEMA_RESULT',
+        requestId,
+        modeId,
+        ok: false,
+        active: false,
+        reason: 'no-camera',
+        message: 'Start your camera in the meeting before using Absolute Cinema.'
+      });
+      return;
+    }
+
+    if (!isDrawableImage(data.bitmap)) {
+      if (data.bitmap && typeof data.bitmap.close === 'function') data.bitmap.close();
+      setAbsoluteCinemaActive(false);
+      state.absoluteCinema.modeId = Math.max(state.absoluteCinema.modeId, modeId);
+      post({
+        type: 'SV_ABSOLUTE_CINEMA_RESULT',
+        requestId,
+        modeId,
+        ok: false,
+        active: false,
+        reason: 'image-unavailable',
+        message: 'The Absolute Cinema image could not be prepared.'
+      });
+      return;
+    }
+
+    const restarted = state.absoluteCinema.active;
+    const duration = clampAbsoluteCinemaDuration(data.durationMs);
+    closeAbsoluteCinemaImage();
+    state.absoluteCinema.modeId = modeId;
+    state.absoluteCinema.image = data.bitmap;
+    state.absoluteCinema.deadline = performance.now() + duration;
+    setAbsoluteCinemaActive(true);
+    document.documentElement.dataset.snapVanishAbsoluteCinemaMode = String(modeId);
+    post({
+      type: 'SV_ABSOLUTE_CINEMA_RESULT',
+      requestId,
+      modeId,
+      ok: true,
+      active: true,
+      restarted,
+      durationMs: duration
+    });
+  }
+
+  function deactivateAbsoluteCinema(data) {
+    const modeId = Number(data.modeId) || 0;
+    if (modeId < state.absoluteCinema.modeId) return;
+    state.absoluteCinema.modeId = Math.max(state.absoluteCinema.modeId, modeId);
+    setAbsoluteCinemaActive(false);
+  }
+
+  function drawAbsoluteCinema(image) {
+    const width = this.canvas.width;
+    const height = this.canvas.height;
+    const sourceWidth = Number(image.width) || 0;
+    const sourceHeight = Number(image.height) || 0;
+    this.context.save();
+    this.context.setTransform(1, 0, 0, 1, 0, 0);
+    this.context.fillStyle = '#000';
+    this.context.fillRect(0, 0, width, height);
+    if (!sourceWidth || !sourceHeight) {
+      this.context.restore();
+      return;
+    }
+    const scale = Math.min(width / sourceWidth, height / sourceHeight);
+    const drawWidth = sourceWidth * scale;
+    const drawHeight = sourceHeight * scale;
+    this.context.translate(width, 0);
+    this.context.scale(-1, 1);
+    this.context.drawImage(
+      image,
+      (width - drawWidth) / 2,
+      (height - drawHeight) / 2,
+      drawWidth,
+      drawHeight
+    );
+    this.context.restore();
   }
 
   function wrapVideoTrack(canvasTrack, adapter) {
@@ -221,6 +391,7 @@
       try {
         this.configureCanvas();
         const now = Date.now();
+        expireAbsoluteCinema(performance.now());
         const processedFresh = this.processedFrame && now - this.processedAt < 1500;
 
         if (state.framesInFlight && now - this.lastFrameSentAt > 1600) {
@@ -234,7 +405,10 @@
           }
         }
 
-        if (this.video.readyState >= 2) {
+        if (state.absoluteCinema.active && state.absoluteCinema.image) {
+          drawAbsoluteCinema.call(this, state.absoluteCinema.image);
+          this.lastDrawWasProcessed = false;
+        } else if (this.video.readyState >= 2) {
           this.context.drawImage(this.video, 0, 0, this.canvas.width, this.canvas.height);
           this.lastDrawWasProcessed = false;
           if (processedFresh) {
@@ -342,6 +516,7 @@
           }
         }
       }
+      if (state.adapters.size === 0) setAbsoluteCinemaActive(false);
     }
   }
 
@@ -423,6 +598,9 @@
       else if (data.bitmap && data.bitmap.close) data.bitmap.close();
     } else if (data.type === 'SV_SET_MUTED') {
       setMuted(Boolean(data.muted));
+    } else if (data.type === 'SV_ABSOLUTE_CINEMA') {
+      if (data.active) activateAbsoluteCinema(data);
+      else deactivateAbsoluteCinema(data);
     } else if (data.type === 'SV_REQUEST_AUDIO_STATE') {
       reportAudioState(true);
     } else if (data.type === 'SV_CLIENT_HELLO') {
@@ -446,6 +624,8 @@
         activeAdapter: state.activeAdapter ? state.activeAdapter.id : null,
         audio: detectMutedState(),
         streamReplaced: document.documentElement.dataset.snapVanishStream === 'replaced',
+        absoluteCinemaActive: state.absoluteCinema.active,
+        absoluteCinemaModeId: state.absoluteCinema.modeId,
         error: state.lastError ? state.lastError.message : null,
         unsupportedReason: state.unsupportedReason
       });
